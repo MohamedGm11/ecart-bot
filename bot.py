@@ -5,26 +5,39 @@ from bs4 import BeautifulSoup
 from io import BytesIO
 from datetime import datetime
 import time
-import os  # <--- ضروري جداً إضافة هذه المكتبة
+import os
 from flask import Flask
 from threading import Thread
 
-# ================= إعدادات البوت الآمنة =================
-# هنا التغيير: البوت سيجلب المفاتيح من متغيرات النظام وليس من الكود مباشرة
+# ================= 1. إعدادات السيرفر الوهمي (القلب النابض) =================
+# هذا الجزء هو الذي كان ناقصاً عندك وتسبب في الخطأ
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "I am alive! Bot is running..."
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+# ================= 2. إعدادات البوت والمفاتيح الآمنة =================
+# جلب المفاتيح من متغيرات البيئة في Render
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 API_KEY = os.environ.get("API_KEY")
 BASE_URL = "https://private.mybrocard.com/api/v2"
 
-# التحقق من أن المفاتيح موجودة
+# التحقق من وجود المفاتيح (للتشخيص فقط)
 if not BOT_TOKEN or not API_KEY:
-    print("❌ خطأ: لم يتم العثور على المفاتيح في متغيرات البيئة.")
-    # لا توقف البرنامج هنا محلياً، لكن في السيرفر سيعمل بشكل صحيح
-    exit()
+    print("⚠️ تحذير: لم يتم العثور على المفاتيح في متغيرات البيئة! تأكد من إضافتها في Render.")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 user_sessions = {}
 
-# ================= دوال مساعدة =================
+# ================= 3. دوال الاتصال والتحليل =================
 
 def call_api(method, endpoint, params=None, json_data=None):
     headers = {
@@ -54,6 +67,7 @@ def format_date(date_str):
         return str(date_str)
 
 def get_full_card_details(card_id):
+    """سحب البيانات الحساسة من Embed"""
     embed_data = call_api("POST", f"cards/{card_id}/embed")
     if embed_data and 'link' in embed_data:
         try:
@@ -84,7 +98,7 @@ def get_full_card_details(card_id):
         except: pass
     return None
 
-# ================= معالجة الرسائل =================
+# ================= 4. معالجة الرسائل =================
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -99,7 +113,7 @@ def main_handler(message):
     user_id = message.from_user.id
     text = message.text.strip()
     
-    # 1. المستخدم المسجل
+    # المستخدم المسجل
     if user_id in user_sessions:
         card_id = user_sessions[user_id]
         
@@ -118,17 +132,15 @@ def main_handler(message):
             if not found: bot.reply_to(message, "⚠️ لم يصل الكود بعد.")
 
         elif text == '📜 كشف حساب':
-            bot.reply_to(message, "🔄 جاري البحث في السجلات (قد يستغرق لحظات)...")
+            bot.reply_to(message, "🔄 جاري البحث العميق في السجلات...")
             
             all_transactions = []
-            
-            # === نظام البحث العميق (Pagination Loop) ===
-            # نبحث في أول 5 صفحات (500 عملية) لضمان العثور على عمليات البطاقة
+            # البحث في أول 5 صفحات (500 عملية)
             for page_num in range(1, 6): 
                 params = {
                     "per_page": 100,
                     "page": page_num,
-                    "card[]": card_id, # محاولة الفلترة بالسيرفر أولاً (كما في المتصفح)
+                    "card[]": card_id, 
                     "dates[begin]": "2024-01-01"
                 }
                 
@@ -136,27 +148,18 @@ def main_handler(message):
                 
                 if response and 'data' in response and len(response['data']) > 0:
                     for tx in response['data']:
-                        # فلترة يدوية إضافية للتأكد 100%
                         tx_card_id = tx.get('card', {}).get('id')
                         if str(tx_card_id) == str(card_id):
                             all_transactions.append(tx)
                 else:
-                    # إذا الصفحة فاضية، نوقف البحث
-                    break
+                    break # توقف إذا الصفحة فارغة
                 
-                # إذا جمعنا عدد كافي من العمليات (مثلا 50)، نوقف البحث لتوفير الوقت
                 if len(all_transactions) >= 50:
                     break
-                
-                # استراحة قصيرة جداً لتخفيف الحمل
                 time.sleep(0.1)
 
-            # === العرض والترتيب ===
             if len(all_transactions) > 0:
-                # إزالة التكرار (في حال تكررت العمليات)
                 unique_txs = {tx['id']: tx for tx in all_transactions}.values()
-                
-                # الترتيب: الأحدث أولاً
                 sorted_txs = sorted(unique_txs, key=lambda x: x.get('date') or "", reverse=True)
                 
                 report_text = f"📄 سجل المدفوعات ({len(sorted_txs)} عملية)\n"
@@ -188,14 +191,14 @@ def main_handler(message):
                 else:
                     bot.reply_to(message, report_text)
             else:
-                bot.reply_to(message, "📭 لا توجد عمليات لهذه البطاقة (تم البحث في آخر 500 عملية).")
+                bot.reply_to(message, "📭 لا توجد عمليات لهذه البطاقة (في آخر 500 قيد).")
 
         elif text == '❌ خروج':
             del user_sessions[user_id]
             bot.reply_to(message, "تم تسجيل الخروج.", reply_markup=telebot.types.ReplyKeyboardRemove())
         return
 
-    # 2. تسجيل الدخول
+    # تسجيل الدخول
     match = re.search(r'(\d{15,16})\s+(\d{3,4})\s+(\d{2}/\d{2})', text)
     if match:
         input_pan, input_cvv, input_date = match.groups()
@@ -224,7 +227,7 @@ def main_handler(message):
     else:
         bot.reply_to(message, "⚠️ الصيغة: `رقم` `CVV` `MM/YY`", parse_mode="Markdown")
 
-print("Bot is running...")
-keep_alive()  # تشغيل السيرفر الوهمي
+# ================= 5. التشغيل =================
+keep_alive()  # <--- الآن الدالة موجودة ولن يحدث خطأ
 print("Bot is running...")
 bot.infinity_polling()
