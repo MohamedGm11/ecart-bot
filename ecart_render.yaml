@@ -1,0 +1,18 @@
+# E-Cart Bot - Render Blueprint Configuration
+services:
+  - type: web
+    name: ecart-telegram-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python ecart_bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: API_KEY
+        sync: false
+      - key: PORT
+        value: 8080
+      - key: PYTHON_VERSION
+        value: 3.11.0
+    healthCheckPath: /health
+    autoDeploy: true
