@@ -357,7 +357,7 @@ def btn_back(msg):
 
 @bot.message_handler(func=lambda m: m.text in [Messages.BTN_3DS, Messages.BTN_REFRESH])
 def btn_3ds(msg):
-    """Show recent transactions with RAW DESCRIPTOR for 3DS codes"""
+    """Show recent transactions with RAW DESCRIPTOR for 3DS codes - ALL STATES"""
     user_id = msg.from_user.id
     
     if not is_logged_in(user_id):
@@ -371,7 +371,8 @@ def btn_3ds(msg):
     loading = bot.send_message(msg.chat.id, Messages.FETCHING, reply_markup=back_kb())
     
     try:
-        result = api_client.get_payments(card_id, page=1, per_page=10)
+        # Fetch more transactions to find 3DS codes (they might be AUTH or DECLINED)
+        result = api_client.get_payments(card_id, page=1, per_page=20)
         
         if not result or not result.get("data"):
             bot.edit_message_text(Messages.NO_TRANSACTIONS, msg.chat.id, loading.message_id)
@@ -379,9 +380,9 @@ def btn_3ds(msg):
         
         payments = result["data"]
         
-        # Build simple response
+        # Build simple response - show ALL states (3DS codes appear in AUTH/DECLINED too)
         lines = [
-            f"🔐 <b>آخر المعاملات</b>",
+            f"🔐 <b>آخر المعاملات (كل الحالات)</b>",
             f"💳 xxxx-xxxx-xxxx-{last_four}",
             "━━━━━━━━━━━━━━━━━━━━━━",
             ""
@@ -395,12 +396,16 @@ def btn_3ds(msg):
             currency = p.get("currency", "USD")
             date = format_date(p.get("date", ""))
             
+            # Get state name in Arabic
+            state_name = {0: "معلق", 1: "مكتمل", 2: "ملغي", 3: "مرفوض", 4: "مسترد"}.get(state, "؟")
+            
             lines.append(f"{icon} <code>{descriptor}</code>")
-            lines.append(f"   💰 ${amount} {currency}")
+            lines.append(f"   💰 ${amount} {currency} | {state_name}")
             lines.append(f"   📅 {date}")
             lines.append("")
         
         lines.append("💡 <i>كود التحقق في نهاية الوصف مثل: *12345</i>")
+        lines.append("🟡=معلق ✅=مكتمل ❌=مرفوض 🔄=ملغي ↩️=مسترد")
         
         bot.edit_message_text("\n".join(lines), msg.chat.id, loading.message_id)
         
@@ -411,7 +416,7 @@ def btn_3ds(msg):
 
 @bot.message_handler(func=lambda m: m.text == Messages.BTN_STATEMENT)
 def btn_statement(msg):
-    """Show all transactions with total spend - directly in chat"""
+    """Show all transactions with total spend - directly in chat - ALL STATES"""
     user_id = msg.from_user.id
     
     if not is_logged_in(user_id):
@@ -437,17 +442,14 @@ def btn_statement(msg):
             bot.edit_message_text(Messages.NO_TRANSACTIONS, msg.chat.id, loading.message_id)
             return
         
-        # Calculate total (only settled - state 1)
+        # Calculate total for SETTLED only, but show ALL transactions
         total_spend = 0.0
-        settled = []
-        
         for p in all_payments:
-            if p.get("state", {}).get("value") == 1:
+            if p.get("state", {}).get("value") == 1:  # Only settled for total
                 total_spend += float(p.get("amount", 0))
-                settled.append(p)
         
         # Sort by date (newest first)
-        settled.sort(key=lambda x: x.get("date", ""), reverse=True)
+        all_payments.sort(key=lambda x: x.get("date", ""), reverse=True)
         
         # Delete loading message
         try:
@@ -462,20 +464,22 @@ def btn_statement(msg):
 📅 {datetime.now().strftime("%Y/%m/%d")}
 
 ━━━━━━━━━━━━━━━━━━━━━━
-💰 <b>إجمالي المصروفات:</b> <code>${total_spend:,.2f}</code>
-📊 <b>عدد المعاملات:</b> {len(settled)}
-━━━━━━━━━━━━━━━━━━━━━━"""
+💰 <b>إجمالي المصروفات (المكتملة):</b> <code>${total_spend:,.2f}</code>
+📊 <b>عدد المعاملات (الكل):</b> {len(all_payments)}
+━━━━━━━━━━━━━━━━━━━━━━
+🟡=معلق ✅=مكتمل ❌=مرفوض 🔄=ملغي ↩️=مسترد"""
         
         bot.send_message(msg.chat.id, summary, reply_markup=main_menu_kb())
         
-        # Send transactions in chunks (to avoid message too long)
+        # Send transactions in chunks (to avoid message too long) - ALL STATES
         chunk_size = 15
-        for i in range(0, len(settled), chunk_size):
-            chunk = settled[i:i + chunk_size]
+        for i in range(0, len(all_payments), chunk_size):
+            chunk = all_payments[i:i + chunk_size]
             
             lines = []
             for p in chunk:
-                icon = get_status_icon(p.get("state", {}).get("value", -1))
+                state = p.get("state", {}).get("value", -1)
+                icon = get_status_icon(state)
                 descriptor = get_raw_descriptor(p)
                 amount = p.get("amount", "0")
                 currency = p.get("currency", "USD")
@@ -489,7 +493,7 @@ def btn_statement(msg):
                 bot.send_message(msg.chat.id, "\n".join(lines))
                 time.sleep(0.3)  # Avoid flood
         
-        logger.info(f"Statement for user {user_id}: ${total_spend:.2f}, {len(settled)} transactions")
+        logger.info(f"Statement for user {user_id}: ${total_spend:.2f}, {len(all_payments)} transactions")
         
     except Exception as e:
         logger.error(f"Statement error: {e}")
